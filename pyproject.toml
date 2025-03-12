@@ -1,0 +1,47 @@
+[project]
+name = "mac-internet-sharing"
+description = "Mac Internet Sharing Helper"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "GNU GENERAL PUBLIC LICENSE Version 3, 29 June 2007" }
+keywords = ["macos", "osx", "internet sharing", "automation", "cli", "ioservice"]
+authors = [
+    { name = "netanelc305", email = "netanelc305@protonmail.com" }
+]
+maintainers = [
+    { name = "netanelc305", email = "netanelc305@protonmail.com" }
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3 :: Only",
+]
+dynamic = ["dependencies", "version"]
+
+[project.urls]
+"Homepage" = "https://github.com/netanelc305/mac_internet_sharing"
+"Bug Reports" = "https://github.com/netanelc305/mac_internet_sharing/issues"
+
+[project.scripts]
+misha = "mac_internet_sharing.__main__:cli"
+
+[tool.setuptools.packages.find]
+exclude = ["docs*", "tests*"]
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
+version = { attr = "mac_internet_sharing._version.__version__" }
+
+[tool.setuptools_scm]
+version_file = "mac_internet_sharing/_version.py"
+
+[build-system]
+requires = ["setuptools>=43.0.0", "setuptools_scm>=8", "wheel"]
+build-backend = "setuptools.build_meta"

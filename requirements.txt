@@ -1,0 +1,6 @@
+ioregistry
+click
+psutil
+inquirer3
+plumbum
+coloredlogs
