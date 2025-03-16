@@ -9,7 +9,7 @@ from ctypes import c_char_p, c_void_p
 from ctypes.util import find_library
 from enum import Enum
 from pathlib import Path
-from typing import Generator, Optional
+from typing import Any, Generator
 
 import click
 from ioregistry.exceptions import IORegistryException
@@ -51,23 +51,6 @@ def plist_editor(file_path: Path) -> Generator:
     yield data
     with file_path.open('wb') as fp:
         plistlib.dump(data, fp)
-
-
-def get_primary_service_uuid(primary_interface: str) -> Optional[str]:
-    """ Return primary service UUID for given primary interface. """
-    with INTERFACE_PREFERENCES.open('rb') as fp:
-        data = plistlib.load(fp)
-
-    # 'NetworkServices' contains all configured network services keyed by UUID
-    network_services = data.get('NetworkServices', {})
-
-    # Iterate through the services and match by the 'DeviceName'
-    for uuid, service in network_services.items():
-        interface = service.get('Interface', {})
-        if interface.get('DeviceName') == primary_interface:
-            return uuid
-
-    return None
 
 
 def get_apple_usb_ethernet_interfaces() -> dict[str, str]:
@@ -186,27 +169,47 @@ def verify_bridge(name: str = 'bridge100') -> None:
         print(Bridge.parse_ifconfig(result))
 
 
-def configure(primary_interface: str, members: list[str], network_name: str = "user's MacBook Pro") -> None:
+def get_network_services() -> dict[str, dict[str, Any]]:
+    """ Return all network services. """
+    with INTERFACE_PREFERENCES.open('rb') as fp:
+        data = plistlib.load(fp)
+
+    # 'NetworkServices' contains all configured network services keyed by UUID
+    return data.get('NetworkServices', {})
+
+
+def get_service_by_user_defined_name(service_name: str) -> tuple[str, dict[str, Any]]:
+    """ Return service by its user defined name. """
+
+    # Iterate through the services and match by the 'UserDefinedName'
+    for uuid, service in get_network_services().items():
+        if service['UserDefinedName'] == service_name:
+            return (uuid, service)
+
+    raise KeyError(f'No such service: {service_name}')
+
+
+def configure(service_name: str, members: list[str], network_name: str = "user's MacBook Pro") -> None:
     """ Configure NAT settings with given parameters. """
     with plist_editor(NAT_CONFIGS) as configs:
-        primary_service = get_primary_service_uuid(primary_interface)
+        uuid, service = get_service_by_user_defined_name(service_name)
         configs.update({
             'NAT': {
                 'AirPort': {
                     '40BitEncrypt': 1,
                     'Channel': 0,
                     'Enabled': 0,
-                    'NetworkName': f'{network_name}',
+                    'NetworkName': network_name,
                     'NetworkPassword': b''
                 },
                 'Enabled': 1,
                 'NatPortMapDisabled': False,
                 'PrimaryInterface': {
-                    'Device': f'{primary_interface}',
+                    'Device': service['Interface']['DeviceName'],
                     'Enabled': 0,
                     'HardwareKey': '',
                 },
-                'PrimaryService': primary_service,
+                'PrimaryService': uuid,
                 'SharingDevices': members
             }
         })
