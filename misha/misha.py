@@ -11,6 +11,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Generator, Optional
 
+import click
 from ioregistry.exceptions import IORegistryException
 from ioregistry.ioentry import get_io_services_by_type
 from plumbum import ProcessExecutionError, local
@@ -163,8 +164,12 @@ class Bridge:
         return cls(name, ipv4, ipv6, devices)
 
     def __repr__(self) -> str:
-        members_formatted = '\n\t'.join([f'{interface}: {udid}' for udid, interface in self.members.items()])
-        return f'Bridge details:\nipv4: {self.ipv4}\nipv6: {self.ipv6}\nmembers:\n\t{members_formatted}'
+        members_formatted = '\n\t'.join([f'📱 {interface}: {udid}' for udid, interface in self.members.items()])
+        return (f'{click.style("🛜 Bridge details:", bold=True)}\n'
+                f'🌐 {click.style("ipv4:", bold=True)} {self.ipv4}\n'
+                f'🌐 {click.style("ipv6:", bold=True)} {self.ipv6}\n'
+                f'{click.style("members:", bold=True)}\n'
+                f'\t{members_formatted}')
 
 
 def verify_bridge(name: str = 'bridge100') -> None:
@@ -173,12 +178,12 @@ def verify_bridge(name: str = 'bridge100') -> None:
         result = IFCONFIG(name)
     except ProcessExecutionError as e:
         if f'interface {name} does not exist' in str(e):
-            logger.debug('Internet sharing OFF')
+            logger.info('Internet sharing OFF')
         else:
             raise e
     else:
-        logger.debug('Internet sharing ON')
-        logger.debug(Bridge.parse_ifconfig(result))
+        logger.info('Internet sharing ON')
+        print(Bridge.parse_ifconfig(result))
 
 
 def configure(primary_interface: str, members: list[str], network_name: str = "user's MacBook Pro") -> None:
