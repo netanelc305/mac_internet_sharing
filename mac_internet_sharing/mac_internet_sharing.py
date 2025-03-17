@@ -1,24 +1,22 @@
+import asyncio
 import contextlib
-import ctypes
 import dataclasses
 import logging
 import plistlib
 import re
-import time
-from ctypes import c_char_p, c_void_p
-from ctypes.util import find_library
 from enum import Enum
 from pathlib import Path
-from typing import Any, Generator
+from typing import Generator
 
 import click
 from ioregistry.exceptions import IORegistryException
 from ioregistry.ioentry import get_io_services_by_type
 from plumbum import ProcessExecutionError, local
 
-SYSTEM_CONFIGURATION = Path('/Library/Preferences/SystemConfiguration')
-NAT_CONFIGS = SYSTEM_CONFIGURATION / 'com.apple.nat.plist'
-INTERFACE_PREFERENCES = SYSTEM_CONFIGURATION / 'preferences.plist'
+from mac_internet_sharing.native_bridge import SCDynamicStoreCreate, SCDynamicStoreNotifyValue
+from mac_internet_sharing.network_preference import NetworkService
+
+NAT_CONFIGS = Path('/Library/Preferences/SystemConfiguration/com.apple.nat.plist')
 IFCONFIG = local['ifconfig']
 IDEVICES = ['iPhone', 'iPad']
 
@@ -54,7 +52,7 @@ def plist_editor(file_path: Path) -> Generator:
 
 
 def get_apple_usb_ethernet_interfaces() -> dict[str, str]:
-    """ Return list of USB Ethernet interfaces. """
+    """ Return list of Apple USB Ethernet interfaces. """
     interfaces = {}
     for ethernet_interface_entry in get_io_services_by_type('IOEthernetInterface'):
         try:
@@ -80,33 +78,9 @@ def get_apple_usb_ethernet_interfaces() -> dict[str, str]:
 
 
 def notify_store() -> None:
-    """ Notify system configuration store. """
-    sc = ctypes.CDLL(find_library('SystemConfiguration'))
-    cf = ctypes.CDLL(find_library('CoreFoundation'))
-
-    kCFStringEncodingUTF8 = 0x08000100
-
-    cf.CFStringCreateWithCString.argtypes = [c_void_p, c_char_p, ctypes.c_uint32]
-    cf.CFStringCreateWithCString.restype = c_void_p
-
-    store_name = cf.CFStringCreateWithCString(None, b'MyStore', kCFStringEncodingUTF8)
-
-    sc.SCDynamicStoreCreate.argtypes = [c_void_p, c_void_p, c_void_p, c_void_p]
-    sc.SCDynamicStoreCreate.restype = c_void_p
-
-    store = sc.SCDynamicStoreCreate(None, store_name, None, None)
-    if not store:
-        raise RuntimeError('Failed to create SCDynamicStore')
-
-    notify_key = cf.CFStringCreateWithCString(
-        None,
-        f'Prefs:commit:{NAT_CONFIGS}'.encode(),
-        kCFStringEncodingUTF8
-    )
-
-    sc.SCDynamicStoreNotifyValue.argtypes = [c_void_p, c_void_p]
-    sc.SCDynamicStoreNotifyValue.restype = None
-    sc.SCDynamicStoreNotifyValue(store, notify_key)
+    """Notify system configuration store."""
+    store = SCDynamicStoreCreate(b'MyStore')
+    SCDynamicStoreNotifyValue(store, f'Prefs:commit:{NAT_CONFIGS}'.encode())
 
 
 class Bridge:
@@ -169,30 +143,9 @@ def verify_bridge(name: str = 'bridge100') -> None:
         print(Bridge.parse_ifconfig(result))
 
 
-def get_network_services() -> dict[str, dict[str, Any]]:
-    """ Return all network services. """
-    with INTERFACE_PREFERENCES.open('rb') as fp:
-        data = plistlib.load(fp)
-
-    # 'NetworkServices' contains all configured network services keyed by UUID
-    return data.get('NetworkServices', {})
-
-
-def get_service_by_user_defined_name(service_name: str) -> tuple[str, dict[str, Any]]:
-    """ Return service by its user defined name. """
-
-    # Iterate through the services and match by the 'UserDefinedName'
-    for uuid, service in get_network_services().items():
-        if service['UserDefinedName'] == service_name:
-            return (uuid, service)
-
-    raise KeyError(f'No such service: {service_name}')
-
-
-def configure(service_name: str, members: list[str], network_name: str = "user's MacBook Pro") -> None:
+def configure(service_name: NetworkService, members: list[str], network_name: str = "user's MacBook Pro") -> None:
     """ Configure NAT settings with given parameters. """
     with plist_editor(NAT_CONFIGS) as configs:
-        uuid, service = get_service_by_user_defined_name(service_name)
         configs.update({
             'NAT': {
                 'AirPort': {
@@ -205,11 +158,11 @@ def configure(service_name: str, members: list[str], network_name: str = "user's
                 'Enabled': 1,
                 'NatPortMapDisabled': False,
                 'PrimaryInterface': {
-                    'Device': service['Interface']['DeviceName'],
+                    'Device': service_name.interface.devices_name,
                     'Enabled': 0,
                     'HardwareKey': '',
                 },
-                'PrimaryService': uuid,
+                'PrimaryService': service_name.uuid,
                 'SharingDevices': members
             }
         })
@@ -233,5 +186,5 @@ async def set_sharing_state(state: SharingState) -> None:
         configs['NAT']['Enabled'] = new_state
 
     notify_store()
-    time.sleep(SLEEP_TIME)
+    await asyncio.sleep(SLEEP_TIME)
     verify_bridge()

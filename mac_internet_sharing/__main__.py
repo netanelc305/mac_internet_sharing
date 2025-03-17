@@ -5,8 +5,8 @@ import click
 import coloredlogs
 import inquirer3
 
-from misha.misha import SharingState, configure, get_apple_usb_ethernet_interfaces, get_network_services, \
-    set_sharing_state, verify_bridge
+from mac_internet_sharing.mac_internet_sharing import SharingState, configure, get_apple_usb_ethernet_interfaces, set_sharing_state, verify_bridge
+from mac_internet_sharing.network_preference import NetworkPreferencePlist, INTERFACE_PREFERENCES
 
 logging.getLogger('plumbum.local').disabled = True
 logging.getLogger('asyncio').disabled = True
@@ -45,20 +45,30 @@ def cli_status() -> None:
 
 
 @cli.command('configure')
-@click.argument('network_service',
-                type=click.Choice([service['UserDefinedName'] for service in get_network_services().values()]))
+@click.option('-n', '--network', 'network_service_name', required=False)
 @click.option('-u', '--udid', 'devices', multiple=True, required=False,
               help='IDevice udid')
 @click.option('-s', '--start', is_flag=True, default=False)
-def cli_configure(network_service: str, devices: tuple[str], network_name="user's MacBook Pro",
+def cli_configure(network_service_name: str = None, devices: tuple[str] = None, network_name="user's MacBook Pro",
                   start: bool = False) -> None:
     """ Share the internet with specified devices. """
+    network_preferences = NetworkPreferencePlist(INTERFACE_PREFERENCES)
+    if network_service_name is None:
+        network_service = network_preferences.current_set
+        logger.info(f'Network service name was not provided using default: {network_service.interface.user_defined_name}')
+    else:
+        network_service = network_preferences.network_services.get_by_user_defined_name(network_service_name)
+        if network_service is None:
+            raise ValueError(f'Network service "{network_service_name}" not found')
+
     usb_devices = get_apple_usb_ethernet_interfaces()
     if not len(devices) > 0:
+        udids = list(usb_devices.keys())
         questions = [
             inquirer3.Checkbox('Devices',
                                message='Choose devices',
-                               choices=usb_devices,
+                               choices=udids,
+                               default=udids,
                                ),
         ]
         devices = inquirer3.prompt(questions)['Devices']

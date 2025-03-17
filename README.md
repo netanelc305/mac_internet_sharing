@@ -17,10 +17,10 @@ The tool provides several commands to manage internet sharing. Here are some com
 To share your internet connection on a specified primary interface, use:
 
 ```bash
-sudo misha configure <primary_interface> -u <udid> -u <udid> -s
+sudo mac_internet_sharing configure -n <primary_interface> -u <udid> -u <udid> -s
 ```
 
-- **`<primary_interface>`:** Replace with your network interface (e.g., `en0`).
+- **`<primary_interface>`:** Replace with your network interface name (e.g., `"Ethernet Adapter (en6)"`).
 - **`-u <udid>`:** Optionally specify one or more device UDIDs.
 - **`-s`:** Automatically start sharing after configuration.
 
@@ -32,12 +32,12 @@ Manage the sharing state with the following commands:
 
 - **Turn Sharing Off:**
   ```bash
-  sudo misha off
+  sudo mac_internet_sharing off
   ```
 
 - **Turn Sharing On:**
   ```bash
-  sudo misha on
+  sudo mac_internet_sharing on
   ```
 
 ## Contributing

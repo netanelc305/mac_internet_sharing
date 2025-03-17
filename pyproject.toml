@@ -26,21 +26,21 @@ classifiers = [
 dynamic = ["dependencies", "version"]
 
 [project.urls]
-"Homepage" = "https://github.com/netanelc305/misha"
-"Bug Reports" = "https://github.com/netanelc305/misha/issues"
+"Homepage" = "https://github.com/netanelc305/mac_internet_sharing"
+"Bug Reports" = "https://github.com/netanelc305/mac_internet_sharing/issues"
 
 [project.scripts]
-misha = "misha.__main__:cli"
+misha = "mac_internet_sharing.__main__:cli"
 
 [tool.setuptools.packages.find]
 exclude = ["docs*", "tests*"]
 
 [tool.setuptools.dynamic]
 dependencies = { file = ["requirements.txt"] }
-version = { attr = "misha._version.__version__" }
+version = { attr = "mac_internet_sharing._version.__version__" }
 
 [tool.setuptools_scm]
-version_file = "misha/_version.py"
+version_file = "mac_internet_sharing/_version.py"
 
 [build-system]
 requires = ["setuptools>=43.0.0", "setuptools_scm>=8", "wheel"]
