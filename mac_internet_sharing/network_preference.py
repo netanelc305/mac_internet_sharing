@@ -21,6 +21,7 @@ class Interface:
 @dataclass
 class NetworkService:
     uuid: str
+    user_defined_name: str
     interface: Interface
 
 
@@ -28,7 +29,7 @@ class NetworkServiceList(UserList):
     def get_by_user_defined_name(self, user_defined_name: str) -> Optional[NetworkService]:
         """ Get network service by user defined name. """
         return self._find_network_service(
-            lambda ns: ns.interface.user_defined_name == user_defined_name
+            lambda ns: ns.user_defined_name == user_defined_name
         )
 
     def get_by_user_devices_name(self, devices_name: str) -> Optional[NetworkService]:
@@ -64,7 +65,8 @@ class NetworkPreferencePlist:
         network_services = NetworkServiceList()
         for uuid, service_data in self.data.get('NetworkServices', {}).items():
             interface = Interface.from_dict(service_data.get('Interface'))
-            network_services.append(NetworkService(uuid, interface))
+            user_defined_name = service_data.get('UserDefinedName')
+            network_services.append(NetworkService(uuid, user_defined_name, interface))
         return network_services
 
     def _current_set(self) -> Optional[NetworkService]:
@@ -77,7 +79,7 @@ class NetworkPreferencePlist:
 def get_network_services_names() -> list[str]:
     """ Return list of network service names. """
     try:
-        names = [services.interface.user_defined_name for services in
+        names = [services.user_defined_name for services in
                  NetworkPreferencePlist(INTERFACE_PREFERENCES).network_services]
     except KeyError:
         names = []
