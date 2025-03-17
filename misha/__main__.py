@@ -5,7 +5,8 @@ import click
 import coloredlogs
 import inquirer3
 
-from misha.misha import SharingState, configure, get_apple_usb_ethernet_interfaces, set_sharing_state, verify_bridge
+from misha.misha import SharingState, configure, get_apple_usb_ethernet_interfaces, get_network_services, \
+    set_sharing_state, verify_bridge
 
 logging.getLogger('plumbum.local').disabled = True
 logging.getLogger('asyncio').disabled = True
@@ -44,11 +45,13 @@ def cli_status() -> None:
 
 
 @cli.command('configure')
-@click.argument('primary_interface')
+@click.argument('network_service',
+                type=click.Choice([service['UserDefinedName'] for service in get_network_services().values()]))
 @click.option('-u', '--udid', 'devices', multiple=True, required=False,
               help='IDevice udid')
 @click.option('-s', '--start', is_flag=True, default=False)
-def cli_configure(primary_interface: str, devices: tuple[str], network_name="user's MacBook Pro", start: bool = False) -> None:
+def cli_configure(network_service: str, devices: tuple[str], network_name="user's MacBook Pro",
+                  start: bool = False) -> None:
     """ Share the internet with specified devices. """
     usb_devices = get_apple_usb_ethernet_interfaces()
     if not len(devices) > 0:
@@ -64,7 +67,7 @@ def cli_configure(primary_interface: str, devices: tuple[str], network_name="use
     except KeyError as e:
         logger.error(f'No device with UDID {e.args[0]}')
     else:
-        configure(primary_interface, devices, network_name)
+        configure(network_service, devices, network_name)
         if start:
             asyncio.run(set_sharing_state(SharingState.ON))
 
