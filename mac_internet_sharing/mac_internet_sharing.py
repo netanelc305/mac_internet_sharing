@@ -161,6 +161,7 @@ def configure(service_name: NetworkService, members: list[str], network_name: st
                     'Device': service_name.interface.devices_name,
                     'Enabled': 0,
                     'HardwareKey': '',
+                    'PrimaryUserReadable': service_name.interface.user_defined_name,
                 },
                 'PrimaryService': service_name.uuid,
                 'SharingDevices': members
