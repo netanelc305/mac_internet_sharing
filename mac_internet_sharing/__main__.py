@@ -9,7 +9,7 @@ import inquirer3
 from mac_internet_sharing.mac_internet_sharing import SharingState, configure, get_apple_usb_ethernet_interfaces, \
     set_sharing_state, verify_bridge
 from mac_internet_sharing.network_preference import INTERFACE_PREFERENCES, NetworkPreferencePlist, \
-    get_network_services_names
+    get_default_route_network_service, get_network_services_names
 
 logging.getLogger('plumbum.local').disabled = True
 logging.getLogger('asyncio').disabled = True
@@ -56,8 +56,9 @@ def cli_configure(network_service_name: Optional[str] = None, devices: Optional[
     """ Share the internet with specified devices. """
     network_preferences = NetworkPreferencePlist(INTERFACE_PREFERENCES)
     if network_service_name is None:
-        network_service = network_preferences.current_set
-        logger.info(f'Network service name was not provided using default: {network_service.interface.user_defined_name}')
+        network_service = get_default_route_network_service()
+        logger.info(
+            f'Network service name was not provided using default: {network_service.interface.user_defined_name}')
     else:
         network_service = network_preferences.network_services.get_by_user_defined_name(network_service_name)
         if network_service is None:
