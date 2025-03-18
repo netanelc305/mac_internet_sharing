@@ -6,6 +6,7 @@ import click
 import coloredlogs
 import inquirer3
 
+from mac_internet_sharing.exceptions import AccessDeniedError, DeviceNotFoundError, NoDeviceConnectedError
 from mac_internet_sharing.mac_internet_sharing import SharingState, configure, get_apple_usb_ethernet_interfaces, \
     set_sharing_state, verify_bridge
 from mac_internet_sharing.network_preference import INTERFACE_PREFERENCES, NetworkPreferencePlist, \
@@ -65,6 +66,8 @@ def cli_configure(network_service_name: Optional[str] = None, devices: Optional[
             raise ValueError(f'Network service "{network_service_name}" not found')
 
     usb_devices = get_apple_usb_ethernet_interfaces()
+    if len(usb_devices) == 0:
+        raise NoDeviceConnectedError()
     if not len(devices) > 0:
         udids = list(usb_devices.keys())
         questions = [
@@ -78,12 +81,23 @@ def cli_configure(network_service_name: Optional[str] = None, devices: Optional[
     try:
         devices = [usb_devices[x] for x in devices]
     except KeyError as e:
-        logger.error(f'No device with UDID {e.args[0]}')
+        raise DeviceNotFoundError(e.args[0])
     else:
         configure(network_service, devices)
         if start:
             asyncio.run(set_sharing_state(SharingState.ON))
 
 
+def main():
+    try:
+        cli()
+    except NoDeviceConnectedError:
+        logger.error('Device is not connected')
+    except DeviceNotFoundError as e:
+        logger.error(f'Device not found: {e.udid}')
+    except AccessDeniedError:
+        logger.error('This command requires root privileges. Consider retrying with "sudo".')
+
+
 if __name__ == '__main__':
-    cli()
+    main()
