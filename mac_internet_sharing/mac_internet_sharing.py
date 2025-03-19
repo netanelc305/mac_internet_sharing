@@ -196,3 +196,13 @@ async def set_sharing_state(state: SharingState) -> None:
     notify_store()
     await asyncio.sleep(SLEEP_TIME)
     verify_bridge()
+
+
+async def update_sharing_devices(devices: set) -> None:
+    """ Update the SharingDevices list in the NAT configuration. """
+    with plist_editor(NAT_CONFIGS) as configs:
+        if 'NAT' not in configs:
+            raise ValueError('NAT configuration not found in the plist.')
+        configs['NAT']['SharingDevices'] = list(devices)
+    notify_store()
+    await asyncio.sleep(SLEEP_TIME)
