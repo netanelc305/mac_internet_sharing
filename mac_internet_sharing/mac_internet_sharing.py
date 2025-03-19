@@ -13,6 +13,7 @@ from ioregistry.exceptions import IORegistryException
 from ioregistry.ioentry import get_io_services_by_type
 from plumbum import ProcessExecutionError, local
 
+from mac_internet_sharing.exceptions import AccessDeniedError
 from mac_internet_sharing.native_bridge import SCDynamicStoreCreate, SCDynamicStoreNotifyValue
 from mac_internet_sharing.network_preference import NetworkService
 
@@ -38,17 +39,24 @@ class USBEthernetInterface:
     name: str
 
 
+def safe_plist_operation(file_path: Path, mode: str, operation):
+    """Open a file in the given mode, perform an operation, and handle permission errors."""
+    try:
+        with file_path.open(mode) as fp:
+            return operation(fp)
+    except PermissionError:
+        raise AccessDeniedError()
+
+
 @contextlib.contextmanager
 def plist_editor(file_path: Path) -> Generator:
-    """ Context manager to edit a plist file. """
+    """Context manager to edit a plist file."""
     if file_path.exists():
-        with file_path.open('rb') as fp:
-            data = plistlib.load(fp)
+        data = safe_plist_operation(file_path, 'rb', plistlib.load)
     else:
         data = {}
     yield data
-    with file_path.open('wb') as fp:
-        plistlib.dump(data, fp)
+    safe_plist_operation(file_path, 'wb', lambda fp: plistlib.dump(data, fp))
 
 
 def get_apple_usb_ethernet_interfaces() -> dict[str, str]:
@@ -185,7 +193,6 @@ async def set_sharing_state(state: SharingState) -> None:
             raise ValueError("Invalid NAT sharing state")
 
         configs['NAT']['Enabled'] = new_state
-
     notify_store()
     await asyncio.sleep(SLEEP_TIME)
     verify_bridge()
