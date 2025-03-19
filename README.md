@@ -14,7 +14,13 @@ The tool provides several commands to manage internet sharing. Here are some com
 
 ### Starting Internet Sharing
 
-To share your internet connection on a specified primary interface, use:
+There are two methods to start internet sharing:
+
+#### 1. Manual Configuration (`configure`)
+
+This method requires you to manually specify the primary network interface and one or more device UDIDs. It sets up
+internet sharing based on your initial configuration. Note that newly connected USB devices after the initial setup are
+not added automatically—you will need to re-run the command to update the configuration.
 
 ```bash
 sudo misha configure -n <primary_interface> -u <udid> -u <udid> -s
@@ -24,7 +30,22 @@ sudo misha configure -n <primary_interface> -u <udid> -u <udid> -s
 - **`-u <udid>`:** Optionally specify one or more device UDIDs.
 - **`-s`:** Automatically start sharing after configuration.
 
-> **Note:** Newly connected devices after the initial setup are not added automatically you will need to reconfigure.
+#### 2. Automatic USB Detection (`plug-n-share`)
+
+This method continuously monitors for new USB devices and automatically updates the sharing configuration when a new
+device is detected. It is ideal if you frequently plug in different devices and want your sharing setup to update in
+real time. You can also run it as a daemon.
+
+```bash
+sudo misha plug-n-share -n <primary_interface> -t <timeout>
+```
+
+- **`<primary_interface>` (optional):** Specify the network service name. If not provided, the default network service
+  is used.
+- **`-t <timeout>`:** Set the polling interval in seconds (default is 5 seconds).
+
+> **Note:** The manual configuration (`configure`) does not automatically detect newly connected devices after the
+> initial setup. Use `plug-n-share` if you require automatic updates.
 
 ### Toggling Internet Sharing
 

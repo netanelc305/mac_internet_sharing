@@ -30,7 +30,7 @@ dynamic = ["dependencies", "version"]
 "Bug Reports" = "https://github.com/netanelc305/mac_internet_sharing/issues"
 
 [project.scripts]
-misha = "mac_internet_sharing.__main__:cli"
+misha = "mac_internet_sharing.__main__:main"
 
 [tool.setuptools.packages.find]
 exclude = ["docs*", "tests*"]
