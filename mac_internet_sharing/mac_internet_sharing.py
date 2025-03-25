@@ -108,10 +108,14 @@ def notify_store() -> None:
 class BridgeMember:
     udid: str
     interface: str
-    lease_entry: LeaseEntry
+    lease_entry: Optional[LeaseEntry] = None
 
     def __repr__(self) -> str:
-        return f'{self.udid:<40} {self.interface:<8} {self.lease_entry.name:<20} {self.lease_entry.ip_address}'
+        lease_suffix = ''
+        if self.lease_entry is not None:
+            # Device may not have a prepared DHCP lease yet
+            lease_suffix += f' {self.lease_entry.name:<20} {self.lease_entry.ip_address}'
+        return f'{self.udid:<40} {self.interface:<8}{lease_suffix}'
 
 
 class Bridge:
