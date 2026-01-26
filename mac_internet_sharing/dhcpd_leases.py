@@ -34,6 +34,7 @@ class LeaseList(UserList):
 
     @classmethod
     def from_file(cls, lease_file: Path) -> 'LeaseList':
+        lease_file.touch()
         with lease_file.open("r") as f:
             data = f.read()
 
