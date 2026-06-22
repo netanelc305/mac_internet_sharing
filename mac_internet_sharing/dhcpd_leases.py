@@ -34,9 +34,10 @@ class LeaseList(UserList):
 
     @classmethod
     def from_file(cls, lease_file: Path) -> 'LeaseList':
-        lease_file.touch()
-        with lease_file.open("r") as f:
-            data = f.read()
+        if not lease_file.exists():
+            return cls([])
+
+        data = lease_file.read_text()
 
         # Split entries based on lease block structures `{ ... }`
         lease_entries = re.findall(r"\{(.*?)\}", data, re.DOTALL)
