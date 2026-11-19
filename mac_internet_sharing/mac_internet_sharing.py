@@ -1,12 +1,9 @@
 import asyncio
-import contextlib
 import dataclasses
 import logging
-import plistlib
 import re
 from enum import Enum
-from pathlib import Path
-from typing import Generator, Optional
+from typing import Optional
 
 import click
 import psutil
@@ -15,11 +12,13 @@ from ioregistry.ioentry import get_io_services_by_type
 from plumbum import ProcessExecutionError, local
 
 from mac_internet_sharing.dhcpd_leases import LeaseEntry, get_dhcp_leases
-from mac_internet_sharing.exceptions import AccessDeniedError
-from mac_internet_sharing.native_bridge import SCDynamicStoreCreate, SCDynamicStoreNotifyValue
+from mac_internet_sharing.native_bridge import SCPreferences
 from mac_internet_sharing.network_preference import NetworkService
 
-NAT_CONFIGS = Path('/Library/Preferences/SystemConfiguration/com.apple.nat.plist')
+# Resolved by SCPreferences relative to /Library/Preferences/SystemConfiguration
+NAT_PREFS_ID = 'com.apple.nat.plist'
+NAT_PREFS_NAME = 'mac_internet_sharing'
+NAT_KEY = 'NAT'
 IFCONFIG = local['ifconfig']
 IDEVICES = ['iPhone', 'iPad']
 
@@ -40,26 +39,6 @@ class USBEthernetInterface:
     product_name: str
     serial_number: str
     name: str
-
-
-def safe_plist_operation(file_path: Path, mode: str, operation):
-    """Open a file in the given mode, perform an operation, and handle permission errors."""
-    try:
-        with file_path.open(mode) as fp:
-            return operation(fp)
-    except PermissionError:
-        raise AccessDeniedError()
-
-
-@contextlib.contextmanager
-def plist_editor(file_path: Path) -> Generator:
-    """Context manager to edit a plist file."""
-    if file_path.exists():
-        data = safe_plist_operation(file_path, 'rb', plistlib.load)
-    else:
-        data = {}
-    yield data
-    safe_plist_operation(file_path, 'wb', lambda fp: plistlib.dump(data, fp))
 
 
 def get_apple_usb_ethernet_interfaces() -> dict[str, str]:
@@ -96,12 +75,6 @@ def get_mac_address(interface: str) -> Optional[str]:
         for addr in addrs[interface]:
             if addr.family == psutil.AF_LINK:  # AF_LINK corresponds to MAC address
                 return addr.address
-
-
-def notify_store() -> None:
-    """Notify system configuration store."""
-    store = SCDynamicStoreCreate(b'MyStore')
-    SCDynamicStoreNotifyValue(store, f'Prefs:commit:{NAT_CONFIGS}'.encode())
 
 
 @dataclasses.dataclass(repr=False)
@@ -183,36 +156,43 @@ def verify_bridge(name: str = 'bridge100') -> None:
         print(Bridge.parse_ifconfig(result))
 
 
+def nat_preferences() -> SCPreferences:
+    """ Open an exclusive session over the NAT preferences. """
+    return SCPreferences(NAT_PREFS_NAME, NAT_PREFS_ID)
+
+
 def configure(service_name: NetworkService, members: list[str], network_name: str = "user's MacBook Pro") -> None:
     """ Configure NAT settings with given parameters. """
-    with plist_editor(NAT_CONFIGS) as configs:
-        configs.update({
-            'NAT': {
-                'AirPort': {
-                    '40BitEncrypt': 1,
-                    'Channel': 0,
-                    'Enabled': 0,
-                    'NetworkName': network_name,
-                    'NetworkPassword': b''
-                },
-                'Enabled': 1,
-                'NatPortMapDisabled': False,
-                'PrimaryInterface': {
-                    'Device': service_name.interface.devices_name,
-                    'Enabled': 0,
-                    'HardwareKey': '',
-                    'PrimaryUserReadable': service_name.interface.user_defined_name,
-                },
-                'PrimaryService': service_name.uuid,
-                'SharingDevices': members
-            }
+    with nat_preferences() as prefs:
+        # Committing notifies the sharing daemon, so keep the current state instead of implicitly starting it
+        enabled = (prefs.get(NAT_KEY) or {}).get('Enabled', 0)
+        prefs.set(NAT_KEY, {
+            'AirPort': {
+                '40BitEncrypt': 1,
+                'Channel': 0,
+                'Enabled': 0,
+                'NetworkName': network_name,
+                'NetworkPassword': b''
+            },
+            'Enabled': enabled,
+            'NatPortMapDisabled': False,
+            'PrimaryInterface': {
+                'Device': service_name.interface.devices_name,
+                'Enabled': 0,
+                'HardwareKey': '',
+                'PrimaryUserReadable': service_name.interface.user_defined_name,
+            },
+            'PrimaryService': service_name.uuid,
+            'SharingDevices': members
         })
+        prefs.commit()
 
 
 async def set_sharing_state(state: SharingState) -> None:
     """ Set sharing state for NAT configuration. """
-    with plist_editor(NAT_CONFIGS) as configs:
-        if 'NAT' not in configs:
+    with nat_preferences() as prefs:
+        nat = prefs.get(NAT_KEY)
+        if nat is None:
             return
 
         if state == SharingState.ON:
@@ -220,21 +200,24 @@ async def set_sharing_state(state: SharingState) -> None:
         elif state == SharingState.OFF:
             new_state = 0
         elif state == SharingState.TOGGLE:
-            new_state = int(not configs['NAT']['Enabled'])
+            new_state = int(not nat['Enabled'])
         else:
             raise ValueError("Invalid NAT sharing state")
 
-        configs['NAT']['Enabled'] = new_state
-    notify_store()
+        nat['Enabled'] = new_state
+        prefs.set(NAT_KEY, nat)
+        prefs.commit()
     await asyncio.sleep(SLEEP_TIME)
     verify_bridge()
 
 
 async def update_sharing_devices(devices: set) -> None:
     """ Update the SharingDevices list in the NAT configuration. """
-    with plist_editor(NAT_CONFIGS) as configs:
-        if 'NAT' not in configs:
+    with nat_preferences() as prefs:
+        nat = prefs.get(NAT_KEY)
+        if nat is None:
             raise ValueError('NAT configuration not found in the plist.')
-        configs['NAT']['SharingDevices'] = list(devices)
-    notify_store()
+        nat['SharingDevices'] = list(devices)
+        prefs.set(NAT_KEY, nat)
+        prefs.commit()
     await asyncio.sleep(SLEEP_TIME)
