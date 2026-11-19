@@ -24,7 +24,10 @@ IFCONFIG = local['ifconfig']
 IDEVICES = ['iPhone', 'iPad']
 
 STATE_CHANGE_TIMEOUT = 10
-STATE_POLL_INTERVAL = 0.2
+LEASE_TIMEOUT = 5
+POLL_INTERVAL = 0.2
+
+BRIDGE_MEMBER_PATTERN = re.compile(r'^\s*member:\s+(\S+)', re.MULTILINE)
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +107,7 @@ class Bridge:
         ipv6 = ipv6_match.group(1) if ipv6_match else ""
 
         # Extract all member interfaces
-        bridge_members = re.findall(r'^\s*member:\s+(\S+)', output, re.MULTILINE)
+        bridge_members = BRIDGE_MEMBER_PATTERN.findall(output)
 
         # Extract the MAC addresses the bridge has learned behind each member, e.g. "9a:e8:59:9b:d4:37 Vlan1 en29 ..."
         learned_addresses = re.findall(
@@ -160,31 +163,64 @@ def get_sharing_bridge_name() -> Optional[str]:
     return None
 
 
-def verify_bridge() -> None:
-    """ Verify network bridge status. """
+def get_sharing_bridge_details() -> Optional[str]:
+    """ Return the `ifconfig` output of the bridge created by Internet Sharing, or None if sharing is off. """
     name = get_sharing_bridge_name()
+    if name is None:
+        return None
     try:
-        result = IFCONFIG(name) if name is not None else None
+        return IFCONFIG(name)
     except ProcessExecutionError as e:
         if f'interface {name} does not exist' not in str(e):
             raise
-        result = None
-
-    if result is None:
-        logger.info('Internet sharing OFF')
-        return
-    logger.info('Internet sharing ON')
-    print(Bridge.parse_ifconfig(result))
+        return None
 
 
-def wait_for_sharing_state(enabled: bool, timeout: float = STATE_CHANGE_TIMEOUT) -> bool:
-    """ Wait for the sharing daemon to reach the requested state. Return whether it did. """
+def get_shared_interfaces() -> set[str]:
+    """ Return the interfaces internet is currently shared with. """
+    details = get_sharing_bridge_details()
+    if details is None:
+        return set()
+    return set(BRIDGE_MEMBER_PATTERN.findall(details))
+
+
+def wait_for_sharing_daemon(timeout: float = STATE_CHANGE_TIMEOUT) -> None:
+    """ Wait for the sharing daemon to apply the committed NAT configuration. """
+    with nat_preferences(lock=False) as prefs:
+        nat = prefs.get(NAT_KEY) or {}
+    expected = set()
+    if nat.get('Enabled'):
+        # Configured devices may be unplugged
+        expected = set(nat.get('SharingDevices', [])).intersection(IFCONFIG('-l').split())
+
     deadline = time.monotonic() + timeout
-    while (get_sharing_bridge_name() is not None) != enabled:
+    while get_shared_interfaces() != expected:
         if time.monotonic() >= deadline:
-            return False
-        time.sleep(STATE_POLL_INTERVAL)
-    return True
+            logger.warning(f'Internet sharing configuration was not applied within {timeout}s')
+            return
+        time.sleep(POLL_INTERVAL)
+
+
+def verify_bridge(lease_timeout: float = 0) -> None:
+    """
+    Verify network bridge status.
+
+    A freshly created bridge takes a moment to get its addresses and for its members to renew their DHCP leases,
+    so wait up to `lease_timeout` seconds for them.
+    """
+    deadline = time.monotonic() + lease_timeout
+    while True:
+        details = get_sharing_bridge_details()
+        if details is None:
+            logger.info('Internet sharing OFF')
+            return
+        bridge = Bridge.parse_ifconfig(details)
+        ready = bridge.ipv6 and all(member.lease_entry is not None for member in bridge.members)
+        if ready or time.monotonic() >= deadline:
+            break
+        time.sleep(POLL_INTERVAL)
+    logger.info('Internet sharing ON')
+    print(bridge)
 
 
 def configure(service_name: NetworkService, members: list[str], network_name: str = "user's MacBook Pro") -> None:
@@ -230,9 +266,8 @@ def set_sharing_state(state: SharingState) -> None:
         prefs.set(NAT_KEY, nat)
         prefs.commit()
 
-    if not wait_for_sharing_state(enabled):
-        logger.warning(f'Internet sharing did not turn {"ON" if enabled else "OFF"} within {STATE_CHANGE_TIMEOUT}s')
-    verify_bridge()
+    wait_for_sharing_daemon()
+    verify_bridge(LEASE_TIMEOUT)
 
 
 def update_sharing_devices(devices: list[str]) -> None:
@@ -244,3 +279,6 @@ def update_sharing_devices(devices: list[str]) -> None:
         nat['SharingDevices'] = devices
         prefs.set(NAT_KEY, nat)
         prefs.commit()
+
+    wait_for_sharing_daemon()
+    verify_bridge(LEASE_TIMEOUT)

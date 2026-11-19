@@ -9,6 +9,10 @@ class NoDeviceConnectedError(MacInternetSharingException):
     """ Raised when no device is connected. """
 
 
+class NoDeviceSelectedError(MacInternetSharingException):
+    """ Raised when no device was selected for sharing. """
+
+
 class AccessDeniedError(MacInternetSharingException):
     """ Raised when access to a resource is denied. """
 

@@ -8,16 +8,13 @@ import coloredlogs
 import inquirer3
 
 from mac_internet_sharing.exceptions import AccessDeniedError, DeviceNotFoundError, NetworkServiceNotFoundError, \
-    NoDeviceConnectedError, NotConfiguredError, SCPreferencesError
+    NoDeviceConnectedError, NoDeviceSelectedError, NotConfiguredError, SCPreferencesError
 from mac_internet_sharing.mac_internet_sharing import SharingState, configure, get_apple_usb_ethernet_interfaces, \
     set_sharing_state, update_sharing_devices, verify_bridge
 from mac_internet_sharing.network_preference import NetworkService, get_default_route_network_service, \
     get_network_service_by_name, get_network_services_names
 
 CONTEXT_SETTINGS = dict(help_option_names=['-h', '--help'], max_content_width=400)
-
-# Time for the sharing daemon to apply a change of the shared devices
-DEVICES_UPDATE_SETTLE_TIME = 1
 
 logging.getLogger('plumbum.local').disabled = True
 coloredlogs.install(level=logging.DEBUG)
@@ -48,8 +45,6 @@ def plug_n_share(network_service_name: Optional[str], timeout: int = 1) -> None:
             logger.info(f'Adding devices {added}')
         usb_devices = current_usb_devices
         update_sharing_devices(list(usb_devices.values()))
-        time.sleep(DEVICES_UPDATE_SETTLE_TIME)
-        verify_bridge()
 
 
 def get_network_service(network_service_name: Optional[str]) -> NetworkService:
@@ -82,7 +77,10 @@ def get_selected_devices(devices: Optional[tuple[str]]) -> list[str]:
                 default=udids,
             ),
         ]
-        devices = inquirer3.prompt(questions)['Devices']
+        # None when the prompt is aborted
+        devices = (inquirer3.prompt(questions) or {}).get('Devices')
+    if not devices:
+        raise NoDeviceSelectedError()
     try:
         return [usb_devices[x] for x in devices]
     except KeyError as e:
@@ -152,6 +150,8 @@ def main() -> None:
         return
     except NoDeviceConnectedError:
         logger.error('Device is not connected')
+    except NoDeviceSelectedError:
+        logger.error('No device was selected')
     except DeviceNotFoundError as e:
         logger.error(f'Device not found: {e.udid}')
     except AccessDeniedError:
