@@ -7,12 +7,21 @@ from typing import Optional
 DHCPD_LEASES = Path('/var/db/dhcpd_leases')
 
 
+def normalize_mac(mac_address: str) -> Optional[tuple[int, ...]]:
+    """ Return a comparable form of a MAC address, since leading zeros are not always printed (e.g. `56:9:1:de`). """
+    try:
+        return tuple(int(part, 16) for part in mac_address.split(':'))
+    except ValueError:
+        return None
+
+
 @dataclass
 class LeaseEntry:
     """ Represents a single DHCP lease entry. """
     name: str
     ip_address: str
     hw_address: str
+    expiry: int = 0
 
     @classmethod
     def from_entry(cls, entry: str) -> 'LeaseEntry':
@@ -21,11 +30,13 @@ class LeaseEntry:
         name_pattern = re.search(r'name=(.*)', entry)
         ip_pattern = re.search(r'ip_address=([\d.]+)', entry)
         mac_pattern = re.search(r'hw_address=1,([0-9a-fA-F:]+)', entry)
+        expiry_pattern = re.search(r'lease=0x([0-9a-fA-F]+)', entry)
 
         return cls(
             name=name_pattern.group(1) if name_pattern else "Unknown",
             ip_address=ip_pattern.group(1) if ip_pattern else "Unknown",
-            hw_address=mac_pattern.group(1) if mac_pattern else "Unknown"
+            hw_address=mac_pattern.group(1) if mac_pattern else "Unknown",
+            expiry=int(expiry_pattern.group(1), 16) if expiry_pattern else 0
         )
 
 
@@ -47,15 +58,13 @@ class LeaseList(UserList):
 
         return cls(leases)
 
-    def get_first_entry_matching_prefix(self, prefix_length: int, mac_address: str) -> Optional[LeaseEntry]:
-        """ Return lease entry if the first 'prefix_length' parts of this lease's MAC address match the given MAC address. """
-
-        for entry in self.data:
-            lease_mac_parts = entry.hw_address.split(":")[:prefix_length]
-            compare_mac_parts = mac_address.split(":")[:prefix_length]
-            if lease_mac_parts != compare_mac_parts:
-                continue
-            return entry
+    def get_by_mac_address(self, mac_address: str) -> Optional[LeaseEntry]:
+        """ Return the most recent lease given to the specified MAC address. """
+        mac = normalize_mac(mac_address)
+        if mac is None:
+            return None
+        matching = [entry for entry in self.data if normalize_mac(entry.hw_address) == mac]
+        return max(matching, key=lambda entry: entry.expiry, default=None)
 
 
 def get_dhcp_leases() -> LeaseList:

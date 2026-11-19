@@ -1,17 +1,17 @@
-import asyncio
 import dataclasses
 import logging
 import re
+import time
 from enum import Enum
 from typing import Optional
 
 import click
-import psutil
 from ioregistry.exceptions import IORegistryException
 from ioregistry.ioentry import get_io_services_by_type
 from plumbum import ProcessExecutionError, local
 
 from mac_internet_sharing.dhcpd_leases import LeaseEntry, get_dhcp_leases
+from mac_internet_sharing.exceptions import NotConfiguredError
 from mac_internet_sharing.native_bridge import SCPreferences, get_dynamic_store_value
 from mac_internet_sharing.network_preference import NetworkService
 
@@ -23,8 +23,11 @@ NETWORK_SHARING_STORE_KEY = 'com.apple.NetworkSharing'
 IFCONFIG = local['ifconfig']
 IDEVICES = ['iPhone', 'iPad']
 
-SLEEP_TIME = 1
-PREFIX_SIZE = 3
+STATE_CHANGE_TIMEOUT = 10
+LEASE_TIMEOUT = 5
+POLL_INTERVAL = 0.2
+
+BRIDGE_MEMBER_PATTERN = re.compile(r'^\s*member:\s+(\S+)', re.MULTILINE)
 
 logger = logging.getLogger(__name__)
 
@@ -33,13 +36,6 @@ class SharingState(Enum):
     ON = 'ON'
     OFF = 'OFF'
     TOGGLE = 'TOGGLE'
-
-
-@dataclasses.dataclass
-class USBEthernetInterface:
-    product_name: str
-    serial_number: str
-    name: str
 
 
 def get_apple_usb_ethernet_interfaces() -> dict[str, str]:
@@ -60,22 +56,12 @@ def get_apple_usb_ethernet_interfaces() -> dict[str, str]:
         except IORegistryException:
             continue
 
-        product_name = usb_host.properties['USB Product Name']
-        usb_serial_number = usb_host.properties['USB Serial Number']
-        if product_name not in IDEVICES:
+        product_name = usb_host.properties.get('USB Product Name')
+        usb_serial_number = usb_host.properties.get('USB Serial Number')
+        if product_name not in IDEVICES or usb_serial_number is None:
             continue
         interfaces[usb_serial_number] = ethernet_interface_entry.name
     return interfaces
-
-
-def get_mac_address(interface: str) -> Optional[str]:
-    """ Returns the MAC address of the specified network interface. """
-    addrs = psutil.net_if_addrs()
-
-    if interface in addrs:
-        for addr in addrs[interface]:
-            if addr.family == psutil.AF_LINK:  # AF_LINK corresponds to MAC address
-                return addr.address
 
 
 @dataclasses.dataclass(repr=False)
@@ -121,16 +107,26 @@ class Bridge:
         ipv6 = ipv6_match.group(1) if ipv6_match else ""
 
         # Extract all member interfaces
-        bridge_members = re.findall(r'^\s*member:\s+(\S+)', output, re.MULTILINE)
-        devices = []
+        bridge_members = BRIDGE_MEMBER_PATTERN.findall(output)
+
+        # Extract the MAC addresses the bridge has learned behind each member, e.g. "9a:e8:59:9b:d4:37 Vlan1 en29 ..."
+        learned_addresses = re.findall(
+            r'^\s*((?:[0-9a-fA-F]{1,2}:){5}[0-9a-fA-F]{1,2})\s+Vlan\d+\s+(\S+)',
+            output,
+            re.MULTILINE
+        )
 
         dhcp_leases = get_dhcp_leases()
-
+        devices = []
         for udid, interface in get_apple_usb_ethernet_interfaces().items():
             if interface not in bridge_members:
                 continue
-            # Apple randomizes MAC addresses for privacy, so we match only the first few bytes
-            lease_entry = dhcp_leases.get_first_entry_matching_prefix(PREFIX_SIZE, get_mac_address(interface))
+            lease_entry = None
+            for mac_address, member in learned_addresses:
+                if member == interface:
+                    lease_entry = dhcp_leases.get_by_mac_address(mac_address)
+                    if lease_entry is not None:
+                        break
             devices.append(BridgeMember(udid, interface, lease_entry))
         return cls(name, ipv4, ipv6, devices)
 
@@ -141,6 +137,11 @@ class Bridge:
                 f'🌐 {click.style("ipv6:", bold=True)} {self.ipv6}\n'
                 f'{click.style("members:", bold=True)}\n'
                 f'\t{members_formatted}')
+
+
+def nat_preferences(lock: bool = True) -> SCPreferences:
+    """ Open a session over the NAT preferences. Locking is required for writing. """
+    return SCPreferences(NAT_PREFS_NAME, NAT_PREFS_ID, lock=lock)
 
 
 def get_sharing_bridge_name() -> Optional[str]:
@@ -162,27 +163,64 @@ def get_sharing_bridge_name() -> Optional[str]:
     return None
 
 
-def verify_bridge() -> None:
-    """ Verify network bridge status. """
+def get_sharing_bridge_details() -> Optional[str]:
+    """ Return the `ifconfig` output of the bridge created by Internet Sharing, or None if sharing is off. """
     name = get_sharing_bridge_name()
     if name is None:
-        logger.info('Internet sharing OFF')
-        return
+        return None
     try:
-        result = IFCONFIG(name)
+        return IFCONFIG(name)
     except ProcessExecutionError as e:
-        if f'interface {name} does not exist' in str(e):
+        if f'interface {name} does not exist' not in str(e):
+            raise
+        return None
+
+
+def get_shared_interfaces() -> set[str]:
+    """ Return the interfaces internet is currently shared with. """
+    details = get_sharing_bridge_details()
+    if details is None:
+        return set()
+    return set(BRIDGE_MEMBER_PATTERN.findall(details))
+
+
+def wait_for_sharing_daemon(timeout: float = STATE_CHANGE_TIMEOUT) -> None:
+    """ Wait for the sharing daemon to apply the committed NAT configuration. """
+    with nat_preferences(lock=False) as prefs:
+        nat = prefs.get(NAT_KEY) or {}
+    expected = set()
+    if nat.get('Enabled'):
+        # Configured devices may be unplugged
+        expected = set(nat.get('SharingDevices', [])).intersection(IFCONFIG('-l').split())
+
+    deadline = time.monotonic() + timeout
+    while get_shared_interfaces() != expected:
+        if time.monotonic() >= deadline:
+            logger.warning(f'Internet sharing configuration was not applied within {timeout}s')
+            return
+        time.sleep(POLL_INTERVAL)
+
+
+def verify_bridge(lease_timeout: float = 0) -> None:
+    """
+    Verify network bridge status.
+
+    A freshly created bridge takes a moment to get its addresses and for its members to renew their DHCP leases,
+    so wait up to `lease_timeout` seconds for them.
+    """
+    deadline = time.monotonic() + lease_timeout
+    while True:
+        details = get_sharing_bridge_details()
+        if details is None:
             logger.info('Internet sharing OFF')
-        else:
-            raise e
-    else:
-        logger.info('Internet sharing ON')
-        print(Bridge.parse_ifconfig(result))
-
-
-def nat_preferences(lock: bool = True) -> SCPreferences:
-    """ Open a session over the NAT preferences. Locking is required for writing. """
-    return SCPreferences(NAT_PREFS_NAME, NAT_PREFS_ID, lock=lock)
+            return
+        bridge = Bridge.parse_ifconfig(details)
+        ready = bridge.ipv6 and all(member.lease_entry is not None for member in bridge.members)
+        if ready or time.monotonic() >= deadline:
+            break
+        time.sleep(POLL_INTERVAL)
+    logger.info('Internet sharing ON')
+    print(bridge)
 
 
 def configure(service_name: NetworkService, members: list[str], network_name: str = "user's MacBook Pro") -> None:
@@ -212,36 +250,35 @@ def configure(service_name: NetworkService, members: list[str], network_name: st
         prefs.commit()
 
 
-async def set_sharing_state(state: SharingState) -> None:
+def set_sharing_state(state: SharingState) -> None:
     """ Set sharing state for NAT configuration. """
     with nat_preferences() as prefs:
         nat = prefs.get(NAT_KEY)
         if nat is None:
-            return
+            raise NotConfiguredError()
 
-        if state == SharingState.ON:
-            new_state = 1
-        elif state == SharingState.OFF:
-            new_state = 0
-        elif state == SharingState.TOGGLE:
-            new_state = int(not nat['Enabled'])
+        if state == SharingState.TOGGLE:
+            enabled = not nat.get('Enabled', 0)
         else:
-            raise ValueError("Invalid NAT sharing state")
+            enabled = state == SharingState.ON
 
-        nat['Enabled'] = new_state
+        nat['Enabled'] = int(enabled)
         prefs.set(NAT_KEY, nat)
         prefs.commit()
-    await asyncio.sleep(SLEEP_TIME)
-    verify_bridge()
+
+    wait_for_sharing_daemon()
+    verify_bridge(LEASE_TIMEOUT)
 
 
-async def update_sharing_devices(devices: set) -> None:
+def update_sharing_devices(devices: list[str]) -> None:
     """ Update the SharingDevices list in the NAT configuration. """
     with nat_preferences() as prefs:
         nat = prefs.get(NAT_KEY)
         if nat is None:
-            raise ValueError('NAT configuration not found in the plist.')
-        nat['SharingDevices'] = list(devices)
+            raise NotConfiguredError()
+        nat['SharingDevices'] = devices
         prefs.set(NAT_KEY, nat)
         prefs.commit()
-    await asyncio.sleep(SLEEP_TIME)
+
+    wait_for_sharing_daemon()
+    verify_bridge(LEASE_TIMEOUT)
