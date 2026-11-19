@@ -43,6 +43,12 @@ _sc.SCError.restype = c_int
 _sc.SCErrorString.argtypes = [c_int]
 _sc.SCErrorString.restype = c_char_p
 
+_sc.SCDynamicStoreCreate.argtypes = [c_void_p, c_void_p, c_void_p, c_void_p]
+_sc.SCDynamicStoreCreate.restype = c_void_p
+
+_sc.SCDynamicStoreCopyValue.argtypes = [c_void_p, c_void_p]
+_sc.SCDynamicStoreCopyValue.restype = c_void_p
+
 _sc.SCPreferencesCreate.argtypes = [c_void_p, c_void_p, c_void_p]
 _sc.SCPreferencesCreate.restype = c_void_p
 
@@ -103,16 +109,40 @@ def _from_cf_property_list(value: c_void_p) -> Any:
         _cf.CFRelease(data)
 
 
+def get_dynamic_store_value(name: str, key: str) -> Optional[Any]:
+    """ Return the value stored under the given SCDynamicStore key, or None if missing. """
+    cf_name = _cf_string(name)
+    cf_key = _cf_string(key)
+    store = _sc.SCDynamicStoreCreate(None, cf_name, None, None)
+    try:
+        if not store:
+            _raise_sc_error('SCDynamicStoreCreate')
+        value = _sc.SCDynamicStoreCopyValue(store, cf_key)
+        if not value:
+            return None
+        try:
+            return _from_cf_property_list(value)
+        finally:
+            _cf.CFRelease(value)
+    finally:
+        if store:
+            _cf.CFRelease(store)
+        _cf.CFRelease(cf_name)
+        _cf.CFRelease(cf_key)
+
+
 class SCPreferences:
     """
-    Exclusive SCPreferences session over a preferences file in /Library/Preferences/SystemConfiguration.
+    SCPreferences session over a preferences file in /Library/Preferences/SystemConfiguration.
 
-    The session is locked for the duration of the `with` block. Nothing is written unless `commit()` is called.
+    Unless `lock` is False, the session is locked for the duration of the `with` block, which requires root.
+    Nothing is written unless `commit()` is called.
     """
 
-    def __init__(self, name: str, prefs_id: str) -> None:
+    def __init__(self, name: str, prefs_id: str, lock: bool = True) -> None:
         self._name = name
         self._prefs_id = prefs_id
+        self._lock = lock
         self._prefs = None
 
     def __enter__(self) -> 'SCPreferences':
@@ -125,7 +155,7 @@ class SCPreferences:
             _cf.CFRelease(cf_prefs_id)
         if not self._prefs:
             _raise_sc_error('SCPreferencesCreate')
-        if not _sc.SCPreferencesLock(self._prefs, True):
+        if self._lock and not _sc.SCPreferencesLock(self._prefs, True):
             try:
                 _raise_sc_error('SCPreferencesLock')
             finally:
@@ -134,7 +164,8 @@ class SCPreferences:
         return self
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:
-        _sc.SCPreferencesUnlock(self._prefs)
+        if self._lock:
+            _sc.SCPreferencesUnlock(self._prefs)
         _cf.CFRelease(self._prefs)
         self._prefs = None
 

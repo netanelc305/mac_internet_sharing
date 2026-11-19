@@ -12,13 +12,14 @@ from ioregistry.ioentry import get_io_services_by_type
 from plumbum import ProcessExecutionError, local
 
 from mac_internet_sharing.dhcpd_leases import LeaseEntry, get_dhcp_leases
-from mac_internet_sharing.native_bridge import SCPreferences
+from mac_internet_sharing.native_bridge import SCPreferences, get_dynamic_store_value
 from mac_internet_sharing.network_preference import NetworkService
 
 # Resolved by SCPreferences relative to /Library/Preferences/SystemConfiguration
 NAT_PREFS_ID = 'com.apple.nat.plist'
 NAT_PREFS_NAME = 'mac_internet_sharing'
 NAT_KEY = 'NAT'
+NETWORK_SHARING_STORE_KEY = 'com.apple.NetworkSharing'
 IFCONFIG = local['ifconfig']
 IDEVICES = ['iPhone', 'iPad']
 
@@ -142,8 +143,31 @@ class Bridge:
                 f'\t{members_formatted}')
 
 
-def verify_bridge(name: str = 'bridge100') -> None:
+def get_sharing_bridge_name() -> Optional[str]:
+    """ Return the name of the bridge created by Internet Sharing, or None if sharing is off. """
+    with nat_preferences(lock=False) as prefs:
+        nat = prefs.get(NAT_KEY)
+    if nat is None:
+        return None
+    external_interface = nat.get('PrimaryInterface', {}).get('Device')
+
+    # Other vmnet users (e.g. virtual machines) publish their own bridges under the same key
+    state = get_dynamic_store_value(NAT_PREFS_NAME, NETWORK_SHARING_STORE_KEY) or {}
+    for entry in state.get('ExternalInterfaces', []):
+        if entry.get('ExternalInterface') != external_interface:
+            continue
+        internal_interfaces = entry.get('InternalInterfaces', [])
+        if internal_interfaces:
+            return internal_interfaces[0]
+    return None
+
+
+def verify_bridge() -> None:
     """ Verify network bridge status. """
+    name = get_sharing_bridge_name()
+    if name is None:
+        logger.info('Internet sharing OFF')
+        return
     try:
         result = IFCONFIG(name)
     except ProcessExecutionError as e:
@@ -156,9 +180,9 @@ def verify_bridge(name: str = 'bridge100') -> None:
         print(Bridge.parse_ifconfig(result))
 
 
-def nat_preferences() -> SCPreferences:
-    """ Open an exclusive session over the NAT preferences. """
-    return SCPreferences(NAT_PREFS_NAME, NAT_PREFS_ID)
+def nat_preferences(lock: bool = True) -> SCPreferences:
+    """ Open a session over the NAT preferences. Locking is required for writing. """
+    return SCPreferences(NAT_PREFS_NAME, NAT_PREFS_ID, lock=lock)
 
 
 def configure(service_name: NetworkService, members: list[str], network_name: str = "user's MacBook Pro") -> None:
