@@ -77,10 +77,11 @@ def get_selected_devices(devices: Optional[tuple[str]]) -> list[str]:
                 default=udids,
             ),
         ]
-        # None when the prompt is aborted
-        devices = (inquirer3.prompt(questions) or {}).get('Devices')
-    if not devices:
-        raise NoDeviceSelectedError()
+        answers = inquirer3.prompt(questions)
+        if answers is None:
+            # Prompt was aborted
+            raise NoDeviceSelectedError()
+        devices = answers['Devices']
     try:
         return [usb_devices[x] for x in devices]
     except KeyError as e:
@@ -128,7 +129,10 @@ def cli_configure(network_service_name: Optional[str] = None,
     network_service = get_network_service(network_service_name)
     selected_devices = get_selected_devices(devices)
     configure(network_service, selected_devices)
-    if start:
+    if not selected_devices:
+        logger.info('No device was selected; turning internet sharing off')
+        set_sharing_state(SharingState.OFF)
+    elif start:
         set_sharing_state(SharingState.ON)
 
 
@@ -151,7 +155,7 @@ def main() -> None:
     except NoDeviceConnectedError:
         logger.error('Device is not connected')
     except NoDeviceSelectedError:
-        logger.error('No device was selected')
+        logger.error('Device selection was aborted')
     except DeviceNotFoundError as e:
         logger.error(f'Device not found: {e.udid}')
     except AccessDeniedError:
