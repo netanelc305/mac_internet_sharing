@@ -5,10 +5,12 @@ import time
 from enum import Enum
 from typing import Optional
 
-import click
 from ioregistry.exceptions import IORegistryException
 from ioregistry.ioentry import get_io_services_by_type
 from plumbum import ProcessExecutionError, local
+from rich.console import Console, Group
+from rich.table import Table
+from rich.text import Text
 
 from mac_internet_sharing.dhcpd_leases import LeaseEntry, get_dhcp_leases
 from mac_internet_sharing.exceptions import NotConfiguredError
@@ -30,6 +32,7 @@ POLL_INTERVAL = 0.2
 BRIDGE_MEMBER_PATTERN = re.compile(r'^\s*member:\s+(\S+)', re.MULTILINE)
 
 logger = logging.getLogger(__name__)
+console = Console()
 
 
 class SharingState(Enum):
@@ -64,18 +67,12 @@ def get_apple_usb_ethernet_interfaces() -> dict[str, str]:
     return interfaces
 
 
-@dataclasses.dataclass(repr=False)
+@dataclasses.dataclass
 class BridgeMember:
     udid: str
     interface: str
+    # Device may not have a prepared DHCP lease yet
     lease_entry: Optional[LeaseEntry] = None
-
-    def __repr__(self) -> str:
-        lease_suffix = ''
-        if self.lease_entry is not None:
-            # Device may not have a prepared DHCP lease yet
-            lease_suffix += f' {self.lease_entry.name:<20} {self.lease_entry.ip_address}'
-        return f'{self.udid:<40} {self.interface:<8}{lease_suffix}'
 
 
 class Bridge:
@@ -130,13 +127,20 @@ class Bridge:
             devices.append(BridgeMember(udid, interface, lease_entry))
         return cls(name, ipv4, ipv6, devices)
 
-    def __repr__(self) -> str:
-        members_formatted = '\n\t'.join(repr(member) for member in self.members)
-        return (f'{click.style("🛜 Bridge details:", bold=True)}\n'
-                f'🌐 {click.style("ipv4:", bold=True)} {self.ipv4}\n'
-                f'🌐 {click.style("ipv6:", bold=True)} {self.ipv6}\n'
-                f'{click.style("members:", bold=True)}\n'
-                f'\t{members_formatted}')
+    def __rich__(self) -> Group:
+        members = Table()
+        for column in ('UDID', 'Interface', 'Name', 'IP'):
+            members.add_column(column)
+        for member in self.members:
+            lease_entry = member.lease_entry
+            members.add_row(member.udid, member.interface,
+                            lease_entry.name if lease_entry else '',
+                            lease_entry.ip_address if lease_entry else '')
+        return Group(
+            Text.assemble(('bridge: ', 'bold'), self.name),
+            Text.assemble(('ipv4: ', 'bold'), self.ipv4),
+            Text.assemble(('ipv6: ', 'bold'), self.ipv6),
+            members)
 
 
 def nat_preferences(lock: bool = True) -> SCPreferences:
@@ -220,7 +224,7 @@ def verify_bridge(lease_timeout: float = 0) -> None:
             break
         time.sleep(POLL_INTERVAL)
     logger.info('Internet sharing ON')
-    print(bridge)
+    console.print(bridge)
 
 
 def configure(service_name: NetworkService, members: list[str], network_name: str = "user's MacBook Pro") -> None:
