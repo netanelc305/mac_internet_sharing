@@ -4,20 +4,22 @@ import time
 from typing import Optional
 
 import click
-import coloredlogs
-import inquirer3
+from rich.console import Console
+from rich.logging import RichHandler
 
+from mac_internet_sharing.checkbox import checkbox
 from mac_internet_sharing.exceptions import AccessDeniedError, DeviceNotFoundError, NetworkServiceNotFoundError, \
     NoDeviceConnectedError, NoDeviceSelectedError, NotConfiguredError, SCPreferencesError
-from mac_internet_sharing.mac_internet_sharing import SharingState, configure, get_apple_usb_ethernet_interfaces, \
-    set_sharing_state, update_sharing_devices, verify_bridge
+from mac_internet_sharing.mac_internet_sharing import SharingState, configure, console, \
+    get_apple_usb_ethernet_interfaces, set_sharing_state, update_sharing_devices, verify_bridge
 from mac_internet_sharing.network_preference import NetworkService, get_default_route_network_service, \
     get_network_service_by_name, get_network_services_names
 
 CONTEXT_SETTINGS = dict(help_option_names=['-h', '--help'], max_content_width=400)
 
 logging.getLogger('plumbum.local').disabled = True
-coloredlogs.install(level=logging.DEBUG)
+logging.basicConfig(level=logging.DEBUG, format='%(message)s', datefmt='[%X]',
+                    handlers=[RichHandler(console=Console(stderr=True), show_path=False)])
 logger = logging.getLogger(__name__)
 
 
@@ -62,26 +64,22 @@ def get_network_service(network_service_name: Optional[str]) -> NetworkService:
     return network_service
 
 
+def prompt_devices(usb_devices: dict[str, str]) -> list[str]:
+    """ Ask the user which of the connected devices to share with. Return their udids. """
+    udids = list(usb_devices)
+    chosen = checkbox(console, 'Choose devices', ['UDID', 'Interface'], [[udid, usb_devices[udid]] for udid in udids])
+    if chosen is None:
+        raise NoDeviceSelectedError()
+    return [udids[index] for index in chosen]
+
+
 def get_selected_devices(devices: Optional[tuple[str]]) -> list[str]:
     """ Retrieve the selected USB devices. """
     usb_devices = get_apple_usb_ethernet_interfaces()
     if not usb_devices:
         raise NoDeviceConnectedError()
     if not devices:
-        udids = list(usb_devices.keys())
-        questions = [
-            inquirer3.Checkbox(
-                'Devices',
-                message='Choose devices',
-                choices=udids,
-                default=udids,
-            ),
-        ]
-        answers = inquirer3.prompt(questions)
-        if answers is None:
-            # Prompt was aborted
-            raise NoDeviceSelectedError()
-        devices = answers['Devices']
+        devices = prompt_devices(usb_devices)
     try:
         return [usb_devices[x] for x in devices]
     except KeyError as e:
@@ -155,7 +153,7 @@ def main() -> None:
     except NoDeviceConnectedError:
         logger.error('Device is not connected')
     except NoDeviceSelectedError:
-        logger.error('Device selection was aborted')
+        logger.error('No device was chosen. Use "--udid" to choose devices without a terminal.')
     except DeviceNotFoundError as e:
         logger.error(f'Device not found: {e.udid}')
     except AccessDeniedError:
