@@ -1,6 +1,5 @@
 ioregistry>=0.0.5
 click
-psutil
 inquirer3
 plumbum
 coloredlogs

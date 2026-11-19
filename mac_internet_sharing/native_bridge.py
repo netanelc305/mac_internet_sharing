@@ -4,7 +4,7 @@ from ctypes import c_bool, c_char_p, c_int, c_long, c_ulong, c_void_p
 from ctypes.util import find_library
 from typing import Any, Optional
 
-from mac_internet_sharing.exceptions import AccessDeniedError
+from mac_internet_sharing.exceptions import AccessDeniedError, SCPreferencesError
 
 kCFStringEncodingUTF8 = 0x08000100
 kCFPropertyListImmutable = 0
@@ -66,10 +66,6 @@ _sc.SCPreferencesSetValue.restype = c_bool
 
 _sc.SCPreferencesCommitChanges.argtypes = [c_void_p]
 _sc.SCPreferencesCommitChanges.restype = c_bool
-
-
-class SCPreferencesError(Exception):
-    """ Raised when a SystemConfiguration preferences call fails. """
 
 
 def _raise_sc_error(function_name: str) -> None:
