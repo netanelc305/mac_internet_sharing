@@ -6,9 +6,8 @@ from typing import Optional
 import click
 from rich.console import Console
 from rich.logging import RichHandler
-from rich.prompt import Prompt
-from rich.table import Table
 
+from mac_internet_sharing.checkbox import checkbox
 from mac_internet_sharing.exceptions import AccessDeniedError, DeviceNotFoundError, NetworkServiceNotFoundError, \
     NoDeviceConnectedError, NoDeviceSelectedError, NotConfiguredError, SCPreferencesError
 from mac_internet_sharing.mac_internet_sharing import SharingState, configure, console, \
@@ -68,31 +67,10 @@ def get_network_service(network_service_name: Optional[str]) -> NetworkService:
 def prompt_devices(usb_devices: dict[str, str]) -> list[str]:
     """ Ask the user which of the connected devices to share with. Return their udids. """
     udids = list(usb_devices)
-    table = Table(title='Connected devices')
-    for column in ('#', 'UDID', 'Interface'):
-        table.add_column(column)
-    for index, udid in enumerate(udids, start=1):
-        table.add_row(str(index), udid, usb_devices[udid])
-    console.print(table)
-
-    while True:
-        try:
-            answer = Prompt.ask('Devices to share (e.g. 1,2 / all / none)', console=console, default='all')
-        except (KeyboardInterrupt, EOFError):
-            raise NoDeviceSelectedError()
-        answer = answer.strip().lower()
-        if answer == 'all':
-            return udids
-        if answer == 'none':
-            return []
-        try:
-            indexes = [int(index) for index in answer.replace(',', ' ').split()]
-        except ValueError:
-            indexes = []
-        if indexes and all(1 <= index <= len(udids) for index in indexes):
-            # Keep the listed order, without duplicates
-            return [udids[index - 1] for index in sorted(set(indexes))]
-        console.print(f'[red]Enter numbers between 1 and {len(udids)}, "all" or "none"')
+    chosen = checkbox(console, 'Choose devices', ['UDID', 'Interface'], [[udid, usb_devices[udid]] for udid in udids])
+    if chosen is None:
+        raise NoDeviceSelectedError()
+    return [udids[index] for index in chosen]
 
 
 def get_selected_devices(devices: Optional[tuple[str]]) -> list[str]:
@@ -175,7 +153,7 @@ def main() -> None:
     except NoDeviceConnectedError:
         logger.error('Device is not connected')
     except NoDeviceSelectedError:
-        logger.error('Device selection was aborted')
+        logger.error('No device was chosen. Use "--udid" to choose devices without a terminal.')
     except DeviceNotFoundError as e:
         logger.error(f'Device not found: {e.udid}')
     except AccessDeniedError:

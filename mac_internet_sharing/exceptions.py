@@ -10,7 +10,7 @@ class NoDeviceConnectedError(MacInternetSharingException):
 
 
 class NoDeviceSelectedError(MacInternetSharingException):
-    """ Raised when the device selection prompt is aborted. """
+    """ Raised when the device selection is aborted or cannot be prompted for. """
 
 
 class AccessDeniedError(MacInternetSharingException):
